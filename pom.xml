@@ -1,0 +1,210 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.github.rurulalanana</groupId>
+  <artifactId>sdk-hikvision</artifactId>
+  <version>1.0.0</version>
+  <packaging>jar</packaging>
+
+  <name>sdk-hikvision</name>
+  <description>
+    海康设备接入实现：基于 device-access 契约的 ISUP（HCISUP SDK）实现。
+
+    与国标链路（gb28181-sip / gb28181-sip-zlm）**并列**，不是它的子模块：
+    本模块不经过 SIP、不用 MANSCDP、不需要平台 20 位编码。
+
+    【与 sdk-dahua 的关键差异】
+    大华 NetSDK 是「平台主动连设备」（CLIENT），ISUP 是「设备连平台」（SERVER）：
+    设备主动注册到平台，平台起 CMS 信令服务 + SMS 流媒体服务，
+    取流时由**设备把码流推给平台**（不是平台去拉）。因此本模块必须监听端口，
+    部署时这些端口要在防火墙放行。
+
+    【原生库】
+    海康不提供公开 Maven 仓库，原生库按平台放在 lib/&lt;platform&gt;/，不入库。
+    缺库时本模块的 Bean 全部降级为不可用，不影响国标链路。
+  </description>
+  <url>https://github.com/rurulalanana/sdk-hikvision</url>
+
+  <properties>
+    <java.version>17</java.version>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <slf4j.version>1.7.36</slf4j.version>
+    <jna.version>5.13.0</jna.version>
+    <jackson.version>2.15.4</jackson.version>
+    <junit.version>5.10.2</junit.version>
+    <deviceaccess.version>1.0.0</deviceaccess.version>
+    <maven.compiler.plugin.version>3.11.0</maven.compiler.plugin.version>
+    <!-- 不要升到 3.4.x：与 Maven 3.6.3 的 plexus-archiver 不兼容。 -->
+    <maven.jar.plugin.version>3.3.0</maven.jar.plugin.version>
+    <maven.surefire.plugin.version>3.2.5</maven.surefire.plugin.version>
+
+    <!--
+      当前激活平台的原生库目录名，由底部 profile 按操作系统覆盖。
+
+      默认 linux64：生产环境是 Linux，本地开发若忘了加 profile 也不至于
+      产出一个「只能在 Windows 跑」的包被误部署。
+    -->
+    <hikvision.platform>linux64</hikvision.platform>
+  </properties>
+
+  <dependencies>
+    <!-- 厂商无关的接入契约。 -->
+    <dependency>
+      <groupId>io.github.rurulalanana</groupId>
+      <artifactId>device-access</artifactId>
+      <version>${deviceaccess.version}</version>
+    </dependency>
+
+    <!-- provided：不打进本模块产物、也不传递给上游。
+         原生库由本模块按 profile 打进 jar；JNA 由平台侧声明。 -->
+    <dependency>
+      <groupId>net.java.dev.jna</groupId>
+      <artifactId>jna</artifactId>
+      <version>${jna.version}</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <version>${slf4j.version}</version>
+    </dependency>
+
+    <!-- ISUP 的设备配置/资源获取走 ISAPI（XML/JSON 透传），需要 JSON 解析。 -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <resources>
+      <!--
+        原生库随 jar 分发：lib/&lt;platform&gt;/*.so|*.dll 会被复制到 jar 根的同名目录，
+        运行时解压到临时目录再加载（见 HikvisionNativeLibrary）。
+
+        lib/ 不入库（厂商许可），因此本地/CI 缺库时这里的过滤会把目录跳过，
+        构建仍成功 —— 只是打出的 jar 不含原生库，部署后 SDK 降级。
+      -->
+      <resource>
+        <directory>lib/${hikvision.platform}</directory>
+        <targetPath>${hikvision.platform}</targetPath>
+        <filtering>false</filtering>
+        <includes>
+          <!--
+            **/*.so* 而不是 **/*.so：Linux 包里的 crypto/ssl 同时提供
+            libcrypto.so 与 libcrypto.so.1.0.0 两种文件名，
+            只匹配 *.so 会漏掉带版本号的（SDK 内部会按版本号 dlopen）。
+          -->
+          <include>**/*.so*</include>
+          <include>**/*.dll</include>
+        </includes>
+      </resource>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+    </resources>
+
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>${maven.compiler.plugin.version}</version>
+        <configuration>
+          <release>${java.version}</release>
+        </configuration>
+      </plugin>
+
+      <!--
+        切平台时清掉另一个平台的残留目录。
+
+        maven-resources-plugin 只复制不删除：从 win64 切到 linux64 后，
+        上一次复制的 win64/*.dll 仍留在 target/classes 里，jar 会同时含两个平台
+        （体积翻倍，而且两边都不报错，极难发现）。
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-clean-plugin</artifactId>
+        <version>3.2.0</version>
+        <executions>
+          <execution>
+            <id>clean-other-platforms</id>
+            <phase>generate-resources</phase>
+            <goals>
+              <goal>clean</goal>
+            </goals>
+            <configuration>
+              <excludeDefaultDirectories>true</excludeDefaultDirectories>
+              <filesets>
+                <fileset>
+                  <directory>${project.build.outputDirectory}</directory>
+                  <includes>
+                    <include>linux64/**</include>
+                    <include>linux32/**</include>
+                    <include>linuxARM/**</include>
+                    <include>win64/**</include>
+                    <include>win32/**</include>
+                    <include>mac64/**</include>
+                    <include>macARM/**</include>
+                  </includes>
+                  <excludes>
+                    <exclude>${hikvision.platform}/**</exclude>
+                  </excludes>
+                </fileset>
+              </filesets>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>${maven.surefire.plugin.version}</version>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>${maven.jar.plugin.version}</version>
+      </plugin>
+    </plugins>
+  </build>
+
+  <profiles>
+    <!--
+      按操作系统自动选平台。交叉打包用 -D 覆盖，**不要用 -P**：
+      显式 -P 与自动激活的 profile 会同时生效，谁最后求值谁赢，
+      在 Windows 上加 -Pnetsdk-linux64 会静默打出 win64 包（大华那边踩过）。
+    -->
+    <profile>
+      <id>hikvision-win64</id>
+      <activation>
+        <os><family>windows</family></os>
+      </activation>
+      <properties>
+        <hikvision.platform>win64</hikvision.platform>
+      </properties>
+    </profile>
+    <profile>
+      <id>hikvision-linux64</id>
+      <activation>
+        <os><family>unix</family><name>Linux</name></os>
+      </activation>
+      <properties>
+        <hikvision.platform>linux64</hikvision.platform>
+      </properties>
+    </profile>
+  </profiles>
+</project>

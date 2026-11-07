@@ -1,0 +1,11 @@
+# 海康 ISUP SDK 原生库：厂商许可禁止随公开仓库分发。
+# 各平台自行从海康开放平台下载后放到 lib/<platform>/。
+lib/
+sdk/
+target/
+*.class
+
+# IDE
+.idea/
+*.iml
+.vscode/
