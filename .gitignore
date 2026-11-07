@@ -1,11 +1,40 @@
-# 海康 ISUP SDK 原生库：厂商许可禁止随公开仓库分发。
-# 各平台自行从海康开放平台下载后放到 lib/<platform>/。
-lib/
-sdk/
+# Maven
 target/
+!.mvn/wrapper/maven-wrapper.jar
 *.class
+
+# ============ 海康 ISUP SDK ============
+# sdk/ 是官方 SDK 的原始解压包（含全部平台、demo、文档），体积大且非必要 ——
+# 仓库只保留构建真正需要的库文件，因此整体忽略。
+sdk/
+
+# lib/<platform>/ 是**入库的**（见下方 ! 规则）。
+# 这样其他电脑 clone 后无需自行去海康开放平台下载，直接就能构建：
+#     mvn install "-Dhikvision.platform=win64"
+#     mvn install "-Dhikvision.platform=linux64"
+#
+# 与 sdk-dahua 保持同一套规则：白名单放行已知平台目录，其余一律忽略，
+# 这样 lib/ 下将来出现的临时文件不会误入库。
+
+# 兜底：除下方显式放行外，lib/ 下其它内容一律忽略
+lib/*
+!lib/linux64/
+!lib/win64/
 
 # IDE
 .idea/
 *.iml
+.ipr
+.iws
 .vscode/
+.classpath
+.project
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 日志
+logs/
+*.log
